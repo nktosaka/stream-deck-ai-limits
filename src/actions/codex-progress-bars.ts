@@ -17,7 +17,8 @@ export class CodexProgressBars extends BaseMonitoringAction<CodexSettings> {
     protected getDisplayData(ev: any, result: StandardUsageResult) {
         const config = this.resolveSettings((ev?.payload?.settings ?? {}) as CodexSettings);
 
-        if (config.layout === "ring") {
+        // The card shows one metric, like the ring, and shares its picker.
+        if (config.layout === "ring" || config.layout === "card") {
             return this.tileDisplay([this.metricSlot(config.metric, result)], config.layout);
         }
 
@@ -59,15 +60,28 @@ export class CodexProgressBars extends BaseMonitoringAction<CodexSettings> {
         const label = metric === "session" ? "Session" : "Week";
 
         if (!bucket) {
-            return { kind: "stat", label, valueText: "—", caption: "no data", muted: true };
+            const cardLabel = metric === "session" ? "セッション・残り" : "週間・残り";
+            return { kind: "stat", label, cardLabel, valueText: "—", caption: "no data", muted: true };
         }
 
         return {
             kind: "gauge",
             label: this.windowLabel(bucket, label),
+            cardLabel: this.windowCardLabel(bucket, metric),
             percent: bucket.usagePercent ?? 0,
-            caption: bucket.resetTime ? formatTimeUntil(bucket.resetTime) : undefined
+            caption: bucket.resetTime ? formatTimeUntil(bucket.resetTime) : undefined,
+            resetAt: bucket.resetTime ?? null
         };
+    }
+
+    /** The card's Japanese name for a window, from the period the API reports. */
+    private windowCardLabel(bucket: ModelUsage, metric: "session" | "weekly"): string {
+        const seconds = bucket.windowSeconds;
+        if (seconds == null) return metric === "session" ? "セッション・残り" : "週間・残り";
+        if (seconds < LONG_WINDOW_SECONDS) return `${Math.round(seconds / 3600)}時間・残り`;
+        if (seconds >= 28 * LONG_WINDOW_SECONDS) return "月間・残り";
+        if (seconds >= 7 * LONG_WINDOW_SECONDS) return "週間・残り";
+        return `${Math.round(seconds / LONG_WINDOW_SECONDS)}日間・残り`;
     }
 
     /**

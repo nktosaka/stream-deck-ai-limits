@@ -1,5 +1,6 @@
 import { TileSize } from "../interfaces/settings";
 import { ServiceTheme, ThemeColors } from "../interfaces/theme";
+import { formatResetTokyo, remainingPercent } from "../utils/card-format";
 
 export interface Slot {
     kind: "gauge" | "stat";
@@ -11,6 +12,10 @@ export interface Slot {
     caption?: string;
     /** Renders the value in the muted label colour, for placeholders like "no data". */
     muted?: boolean;
+    /** Quota name on the card layout, e.g. 「週間・残り」. */
+    cardLabel?: string;
+    /** Raw reset time (ISO string or Unix seconds); the card shows it as an absolute time. */
+    resetAt?: string | number | null;
 }
 
 export interface RenderOptions {
@@ -71,6 +76,40 @@ const BASE = {
         msg: 15, msgLine: 19
     }
 };
+
+/**
+ * The card layout in its two shapes. Everything sits on a column's vertical axis,
+ * so the eye only travels down the middle of the key. A dial is too short for one
+ * column: the reset time gets a second axis on the right, its date sharing the
+ * value's baseline. Baselines were placed by ink, so the air above the provider
+ * and below the date matches.
+ */
+const CARD_GEOMETRY = {
+    key: {
+        inset: 4, border: 1.25, radius: 14,
+        mainX: 72, mainW: 116, resetX: 72, resetW: 116,
+        provider: 10.5, tracking: 1.6, providerY: 22,
+        quota: 12.5, quotaMin: 10, quotaY: 40,
+        value: 46, valueMin: 24, unitRatio: 0.52, unitGap: 1, valueY: 83,
+        barW: 104, barH: 5, barY: 90,
+        resetLabel: "リセット（日本時間）", resetLabelSize: 10, resetLabelY: 113,
+        reset: 15, resetY: 130
+    },
+    dial: {
+        inset: 3, border: 1.25, radius: 12,
+        mainX: 62, mainW: 96, resetX: 152, resetW: 72,
+        provider: 9.5, tracking: 1.4, providerY: 22,
+        quota: 11.5, quotaMin: 9, quotaY: 38,
+        value: 34, valueMin: 20, unitRatio: 0.52, unitGap: 1, valueY: 72,
+        barW: 84, barH: 4, barY: 79,
+        resetLabel: "リセット（JST）", resetLabelSize: 9, resetLabelY: 53,
+        reset: 12.5, resetY: 72
+    }
+};
+
+/** Advance widths, in ems, of a digit and of "%" in Segoe UI Bold, measured from rendered output. */
+const CARD_DIGIT_EM = 0.574;
+const CARD_PERCENT_EM = 0.879;
 
 /** Cap height as a share of the font size; how far the ink reaches above a baseline. */
 const CAP = 0.72;
@@ -153,6 +192,28 @@ export class ProgressBarRenderer {
         openrouter: 'OpenRouter',
         codexbar: 'CodexBar'
     };
+
+    /** The card is the same near-black for every provider; only its accent differs. */
+    private static readonly CARD = {
+        background: '#111214',
+        text: '#F5F6F7',
+        quota: '#E4E6EA',
+        date: '#D5D8DC',
+        label: '#777B84',
+        faint: '#5F636B',
+        track: '#2A2C31',
+        // Yellower and redder than the Claude accent, so a low quota never reads as brand colour.
+        warn: '#F5B83D',
+        danger: '#F0524D'
+    };
+
+    private static readonly CARD_ACCENTS: Partial<Record<ServiceTheme, string>> = {
+        codex: '#38BDF8',
+        claude: '#EB8456'
+    };
+
+    /** The card carries Japanese text, so a Japanese face must come before the generic fallback. */
+    private static readonly CARD_SANS = "'Segoe UI', 'Yu Gothic UI', 'Meiryo', 'Hiragino Sans', 'Noto Sans JP', system-ui, sans-serif";
 
     private static readonly SANS = "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif";
     private static readonly MONO = "'SF Mono', 'JetBrains Mono', 'Roboto Mono', ui-monospace, 'Menlo', monospace";
@@ -274,6 +335,101 @@ export class ProgressBarRenderer {
         }
 
         return this.svg(width, height, body);
+    }
+
+    /**
+     * One metric as a card: provider, quota name, what is left of it with a matching
+     * indicator, and when it resets in Japan time. The value is the inverse of every
+     * other layout — the card answers "how much can I still use" — so it converts
+     * usage here, at the last moment, and the data layer keeps meaning usage. The
+     * card keeps its own fixed type scale rather than the size presets: it has one
+     * number to show and already draws it as large as the key allows.
+     */
+    renderRemainingCard(slot: Slot, theme: ServiceTheme = 'claude', width: number = 144, height: number = 144, opts: RenderOptions = {}): string {
+        const c = ProgressBarRenderer.CARD;
+        const g = this.isDial(width, height) ? CARD_GEOMETRY.dial : CARD_GEOMETRY.key;
+        const accent = ProgressBarRenderer.CARD_ACCENTS[theme] ?? this.themes[theme].primary;
+        const font = ProgressBarRenderer.CARD_SANS;
+
+        const isGauge = slot.kind !== "stat" && !slot.muted;
+        const remaining = isGauge ? remainingPercent(slot.percent) : null;
+        const reset = formatResetTokyo(slot.resetAt);
+        // A balance or a count has no window to reset; a missing window still has one.
+        const showReset = isGauge || !!slot.muted;
+
+        let body = `<rect width="${width}" height="${height}" fill="${c.background}" />`
+            + `<rect x="${g.inset}" y="${g.inset}" width="${width - 2 * g.inset}" height="${height - 2 * g.inset}"`
+            + ` rx="${g.radius}" fill="none" stroke="${accent}" stroke-width="${g.border}" />`;
+
+        if (opts.showName !== false) {
+            const name = (opts.serviceName ?? this.serviceName(theme)).toUpperCase();
+            // Tracking also trails the last letter; shift by half of it to stay centred.
+            body += this.txt(g.mainX + g.tracking / 2, g.providerY, this.fitText(name, g.provider, font, g.mainW, 700, g.tracking),
+                g.provider, 700, accent, "middle", font, g.tracking);
+        }
+
+        const quota = (slot.cardLabel ?? slot.shortLabel ?? slot.label).trim();
+        const quotaSize = this.fitSize(quota, g.quota, g.quotaMin, font, g.mainW, 600);
+        body += this.txt(g.mainX, g.quotaY, this.fitText(quota, quotaSize, font, g.mainW, 600), quotaSize, 600, c.quota, "middle", font);
+
+        if (remaining !== null) {
+            const color = this.cardStatusColor(remaining, accent);
+            body += this.cardPercent(remaining, color, g);
+            body += this.cardIndicator(remaining, color, g);
+        } else {
+            const value = slot.valueText ?? "—";
+            const size = this.fitSize(value, g.value * 0.75, g.valueMin, font, g.mainW, 700);
+            body += this.txt(g.mainX, g.valueY, this.escape(value), size, 700, slot.muted ? c.faint : c.text, "middle", font);
+        }
+
+        if (showReset) {
+            const label = this.fitText(g.resetLabel, g.resetLabelSize, font, g.resetW, 500);
+            body += this.txt(g.resetX, g.resetLabelY, label, g.resetLabelSize, 500, c.label, "middle", font);
+            const text = reset ?? "—";
+            const size = this.fitSize(text, g.reset, 9, font, g.resetW, 600);
+            body += this.txt(g.resetX, g.resetY, this.escape(text), size, 600, reset ? c.date : c.faint, "middle", font);
+        }
+
+        return this.svg(width, height, body);
+    }
+
+    /** The card's number and indicator share one colour: the provider's, until the quota runs low. */
+    private cardStatusColor(remaining: number, accent: string): string {
+        if (remaining < 12) return ProgressBarRenderer.CARD.danger;
+        if (remaining < 30) return ProgressBarRenderer.CARD.warn;
+        return accent;
+    }
+
+    /**
+     * Number and unit are two sizes, so neither anchor alone centres them; the pair
+     * is measured as one block and started half its width left of the axis. The
+     * general estimate runs wide on these glyphs (3.5px off-centre for "68%"), so
+     * the block uses the advances of the card's first face, Segoe UI Bold, whose
+     * digits are tabular.
+     */
+    private cardPercent(remaining: number, color: string, g: typeof CARD_GEOMETRY.key): string {
+        const font = ProgressBarRenderer.CARD_SANS;
+        const digits = String(remaining);
+        const blockW = (s: number) => digits.length * CARD_DIGIT_EM * s + g.unitGap + CARD_PERCENT_EM * snap(s * g.unitRatio);
+        let size = g.value;
+        while (size > g.valueMin && blockW(size) > g.mainW) size -= 0.5;
+        const unit = snap(size * g.unitRatio);
+        const x = this.round(g.mainX - blockW(size) / 2);
+        return `<text x="${x}" y="${g.valueY}" font-family="${font}" font-weight="700" fill="${color}" text-anchor="start">`
+            + `<tspan font-size="${size}">${digits}</tspan><tspan font-size="${unit}" dx="${g.unitGap}">%</tspan></text>`;
+    }
+
+    /** What is left, as a filled share of a centred track: empty at 0%, full at 100%. */
+    private cardIndicator(remaining: number, color: string, g: typeof CARD_GEOMETRY.key): string {
+        const x = this.round(g.mainX - g.barW / 2);
+        const r = g.barH / 2;
+        let out = `<rect class="card-track" x="${x}" y="${g.barY}" width="${g.barW}" height="${g.barH}" rx="${r}" fill="${ProgressBarRenderer.CARD.track}" />`;
+        if (remaining > 0) {
+            // A sliver narrower than the bar is tall would lose its round caps.
+            const w = Math.max(g.barH, (g.barW * remaining) / 100);
+            out += `<rect class="card-fill" x="${x}" y="${g.barY}" width="${this.round(w)}" height="${g.barH}" rx="${r}" fill="${color}" />`;
+        }
+        return out;
     }
 
     private isDial(w: number, h: number): boolean {
@@ -629,6 +785,13 @@ export class ProgressBarRenderer {
             else hi = mid - 1;
         }
         return this.escape(clean.slice(0, lo).trimEnd() + ell);
+    }
+
+    /** Like {@link fitFontSize}, at any weight. */
+    private fitSize(text: string, max: number, min: number, family: string, maxWidth: number, weight: number): number {
+        let size = max;
+        while (size > min && this.measure(text, size, family, weight) > maxWidth) size -= 0.5;
+        return size;
     }
 
     private fitFontSize(text: string, max: number, min: number, family: string, maxWidth: number, tracking = 0): number {

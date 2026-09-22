@@ -21,6 +21,18 @@ interface CachedUsage<TResult extends MonitoringResult> {
     fetchedAt: number;
 }
 
+/**
+ * The shortest gap between two fetch attempts for the same credentials, counted from
+ * the start of the previous attempt so that a failing endpoint cannot be hammered.
+ */
+export const MIN_FETCH_GAP_MS = 30000;
+
+/** Whether a request started a fetch, shares one already running, or was turned away. */
+type FetchTicket<TResult> =
+    | { kind: "started"; promise: Promise<TResult> }
+    | { kind: "joined"; promise: Promise<TResult> }
+    | { kind: "throttled" };
+
 export abstract class BaseMonitoringAction<
     T extends Record<string, any>,
     TResult extends MonitoringResult = StandardUsageResult
@@ -29,7 +41,11 @@ export abstract class BaseMonitoringAction<
     protected intervalId: NodeJS.Timeout | null = null;
     protected isMonitoring = false;
     protected usage = new Map<string, CachedUsage<TResult>>();
-    protected readonly monitoringIntervalMs: number = 900000;
+    /** Per fetch key: when the last attempt started. Kept apart from the data's `fetchedAt`. */
+    protected attemptStartedAt = new Map<string, number>();
+    /** Per fetch key: the fetch in flight, shared by every request that arrives meanwhile. */
+    protected inflight = new Map<string, Promise<TResult>>();
+    protected readonly monitoringIntervalMs: number = 300000;
     protected readonly renderer = new ProgressBarRenderer();
     protected readonly limitsManager = LimitsManager.getInstance();
 
@@ -147,11 +163,33 @@ export abstract class BaseMonitoringAction<
         }
     }
 
+    /**
+     * Every usage fetch goes through here — key presses, the timer, a tile appearing,
+     * a property inspector asking for data. A request inside the minimum gap is turned
+     * away and the tile keeps showing its cached data; nothing is queued for later.
+     */
     protected async refresh(ev: any): Promise<void> {
         this.track(ev);
         const key = this.fetchKey(ev?.payload?.settings);
+        const ticket = this.requestFetch(key, ev);
+
+        if (ticket.kind === "throttled") {
+            // Redraw with the tile's own settings: a property inspector event carries none.
+            const instance = this.instances.get(ev?.action?.id);
+            try {
+                await this.redraw(instance ? this.asEvent(instance) : ev);
+            } catch {}
+            return;
+        }
+        if (ticket.kind === "joined") {
+            // The request that started the fetch stores and draws the result for every
+            // tile on this key; waiting here only lets callers rely on it being done.
+            await ticket.promise.catch(() => {});
+            return;
+        }
+
         try {
-            const result = await this.fetchProviderUsage(ev);
+            const result = await ticket.promise;
             this.usage.set(key, { result, fetchedAt: Date.now() });
             // One fetch feeds every tile sharing the same credentials, each rendered
             // with its own settings — several tiles can show different metrics of it.
@@ -159,6 +197,32 @@ export abstract class BaseMonitoringAction<
         } catch (err: any) {
             streamDeck.logger.error(`[${this.providerName}] Refresh failed: ${err}`);
         }
+    }
+
+    /**
+     * Starts a fetch for these credentials, or explains why not. The attempt time and
+     * the in-flight promise are both recorded before anything is awaited, so requests
+     * arriving together cannot each start their own fetch.
+     */
+    protected requestFetch(key: string, ev: any): FetchTicket<TResult> {
+        const running = this.inflight.get(key);
+        if (running) return { kind: "joined", promise: running };
+
+        const now = Date.now();
+        const last = this.attemptStartedAt.get(key);
+        if (last !== undefined && now - last < MIN_FETCH_GAP_MS) return { kind: "throttled" };
+
+        this.attemptStartedAt.set(key, now);
+        const promise = Promise.resolve()
+            .then(() => this.fetchProviderUsage(ev))
+            .finally(() => this.inflight.delete(key));
+        this.inflight.set(key, promise);
+        return { kind: "started", promise };
+    }
+
+    /** Lets the next request fetch at once, e.g. after the credentials behind a key changed. */
+    protected resetFetchGap(key: string): void {
+        this.attemptStartedAt.delete(key);
     }
 
     protected async refreshAll(): Promise<void> {
@@ -209,12 +273,16 @@ export abstract class BaseMonitoringAction<
         slots?: Slot[];
         /** When set, the tile renders as a single ring gauge instead of bars. */
         ring?: Slot;
+        /** When set, the tile renders as a remaining-quota card. */
+        card?: Slot;
     };
 
     /** Package the slots a tile wants to show into the shape {@link draw} expects. */
     protected tileDisplay(slots: (Slot | null)[], layout: TileLayout) {
         const visible = slots.filter((slot): slot is Slot => slot !== null);
-        return layout === "ring" ? { ring: visible[0] } : { slots: visible };
+        if (layout === "ring") return { ring: visible[0] };
+        if (layout === "card") return { card: visible[0] };
+        return { slots: visible };
     }
 
     protected renderOptions(ev: any): RenderOptions {
@@ -242,23 +310,25 @@ export abstract class BaseMonitoringAction<
 
         const data = this.getDisplayData(ev, result);
         const renderAt = (w: number, h: number) =>
-            data.ring
-                ? this.renderer.renderRing(data.ring, theme, w, h, opts)
-                : data.slots
-                    ? this.renderer.renderSlots(data.slots, theme, w, h, opts)
-                    : this.renderer.render(
-                        data.value1 ?? 0,
-                        data.value2 ?? 0,
-                        theme,
-                        data.resetTime1,
-                        data.resetTime2,
-                        data.label1 ?? "",
-                        data.label2 ?? "",
-                        w, h,
-                        data.valueText1,
-                        data.valueText2,
-                        opts
-                    );
+            data.card
+                ? this.renderer.renderRemainingCard(data.card, theme, w, h, opts)
+                : data.ring
+                    ? this.renderer.renderRing(data.ring, theme, w, h, opts)
+                    : data.slots
+                        ? this.renderer.renderSlots(data.slots, theme, w, h, opts)
+                        : this.renderer.render(
+                            data.value1 ?? 0,
+                            data.value2 ?? 0,
+                            theme,
+                            data.resetTime1,
+                            data.resetTime2,
+                            data.label1 ?? "",
+                            data.label2 ?? "",
+                            w, h,
+                            data.valueText1,
+                            data.valueText2,
+                            opts
+                        );
 
         const svg = renderAt(144, 144);
         const image = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;

@@ -26,7 +26,7 @@ Track usage limits and reset times for **Claude**, **Codex**, **Antigravity**, *
 - **Keys *and* dials:** every action renders on standard keys **and** on Stream Deck+ encoders with a full dial layout.
 - **Live progress bars:** color-coded usage (green, amber, red) plus human-friendly reset countdowns like `3h 33m` or `4d 3h`.
 - **Zero key juggling for most providers:** reuses the credentials your existing CLIs already created locally. Only MiniMax and OpenRouter need a key pasted in.
-- **Always fresh:** usage is polled and cached automatically, so the keys stay current without hammering provider APIs.
+- **Always fresh:** usage is polled every 5 minutes and cached, and pressing a key refreshes it at once. Fetches for the same credentials are at least 30 seconds apart and never overlap, so the keys stay current without hammering provider APIs.
 - **Powered by a typed SDK:** all the provider logic lives in the reusable [`@lenadweb/ai-limits`](https://github.com/lenadweb/ai-limits) library.
 
 ---
@@ -55,6 +55,19 @@ npm run watch
 ```
 
 Then open the **Stream Deck** app, find **AI Usage Limits** in the actions list, and drag any provider onto a key or dial.
+
+#### Running a local build in place of the Marketplace plugin (Windows)
+
+Observed on Stream Deck 7.0.3 and 7.6.0: a build linked with `streamdeck link` (a junction into the repository) exits with code 1 on every start, before the plugin writes any log, with developer mode on or off. The same build copied into `%APPDATA%\Elgato\StreamDeck\Plugins\com.len.limits.sdPlugin` as a plain folder starts and runs normally. The cause of the junction failure was not identified.
+
+Both versions share the plugin UUID `com.len.limits`, so the local build replaces the Marketplace one:
+
+1. Quit Stream Deck from the tray icon.
+2. Move `Plugins\com.len.limits.sdPlugin` (the Marketplace plugin) somewhere outside `Plugins`, and keep it.
+3. Copy the built `com.len.limits.sdPlugin` folder, without `logs`, into `Plugins`.
+4. Start Stream Deck yourself. Existing keys keep their settings; the actions have the same UUIDs.
+
+To go back to the Marketplace plugin, quit Stream Deck, move the local folder out of `Plugins`, move the kept Marketplace folder back to `Plugins\com.len.limits.sdPlugin`, and start Stream Deck again.
 
 ---
 
@@ -91,6 +104,7 @@ Every action has a **Layout** setting:
 
 - **Bars** (default) — the two-slot view, now with a metric picker for each slot.
 - **Ring** — one large ring gauge showing a single metric, with its reset countdown in the middle.
+- **Card / Remaining** (Claude and Codex) — one metric as a centred card: how much of it is **left** (`100 − usage`) with a matching indicator, and its absolute reset time in Japan time (`MM/DD HH:mm`, Asia/Tokyo). The value turns amber below 30% left and red below 12%. Ring and Bars keep showing usage.
 
 Place the same action more than once to build a row of tiles, e.g. Claude Session, Claude Week, Codex Session and Codex Week side by side. Each tile keeps its own metric, and all tiles of a provider share a single API call, so extra tiles cost nothing. MiniMax and OpenRouter tiles carry their own API key, so they are fetched once per distinct key — several tiles on the same key still cost one call, and tiles on different keys each show their own account.
 

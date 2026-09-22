@@ -1,7 +1,10 @@
 export type ProgressBarSettings = Record<string, any>;
 
-/** How a single tile lays out its data: one ring gauge, or the two-slot bar view. */
-export type TileLayout = "ring" | "bars";
+/**
+ * How a single tile lays out its data: one ring gauge, the two-slot bar view, or a
+ * card showing what is left of one metric along with its absolute reset time.
+ */
+export type TileLayout = "ring" | "bars" | "card";
 
 /**
  * How large a tile draws itself. One preset scales the labels, values, reset

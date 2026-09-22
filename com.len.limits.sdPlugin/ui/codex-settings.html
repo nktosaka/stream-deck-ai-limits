@@ -56,9 +56,10 @@
         <select id="layout" class="sdpi-item-value">
             <option value="ring">Ring (one metric)</option>
             <option value="bars">Bars (two metrics)</option>
+            <option value="card">Card / Remaining (one metric)</option>
         </select>
     </sdpi-item>
-    <sdpi-item label="Size">
+    <sdpi-item id="sizeRow" label="Size">
         <select id="size" class="sdpi-item-value">
             <option value="compact">Compact</option>
             <option value="default">Default</option>
@@ -147,10 +148,13 @@
         }
 
         function applyLayoutVisibility() {
-            const isRing = document.getElementById("layout").value === "ring";
-            document.getElementById("ringRow").classList.toggle("hidden", !isRing);
-            document.getElementById("topRow").classList.toggle("hidden", isRing);
-            document.getElementById("bottomRow").classList.toggle("hidden", isRing);
+            const layout = document.getElementById("layout").value;
+            // Card shows one metric like the ring, and has its own fixed type scale.
+            const isSingle = layout === "ring" || layout === "card";
+            document.getElementById("ringRow").classList.toggle("hidden", !isSingle);
+            document.getElementById("topRow").classList.toggle("hidden", isSingle);
+            document.getElementById("bottomRow").classList.toggle("hidden", isSingle);
+            document.getElementById("sizeRow").classList.toggle("hidden", layout === "card");
         }
 
         function saveSettings() {

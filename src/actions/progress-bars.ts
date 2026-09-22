@@ -7,10 +7,10 @@ import { Slot } from "../ui/progress-bar-renderer";
 import { formatTimeUntil } from "../utils/time-formatter";
 
 /** Bucket keys vary per Claude plan/API version, so each metric accepts several. */
-const METRICS: Record<string, { label: string; keys: string[] }> = {
-    session: { label: "Session", keys: ["five_hour", "5h_quota"] },
-    weekly: { label: "Week", keys: ["seven_day", "7d_quota"] },
-    weeklySonnet: { label: "Sonnet", keys: ["seven_day_sonnet", "7d_sonnet_quota"] }
+const METRICS: Record<string, { label: string; cardLabel: string; keys: string[] }> = {
+    session: { label: "Session", cardLabel: "5時間・残り", keys: ["five_hour", "5h_quota"] },
+    weekly: { label: "Week", cardLabel: "週間・残り", keys: ["seven_day", "7d_quota"] },
+    weeklySonnet: { label: "Sonnet", cardLabel: "Sonnet週間・残り", keys: ["seven_day_sonnet", "7d_sonnet_quota"] }
 };
 
 /** The bucket the built-in Sonnet metric already covers, scoped or legacy alike. */
@@ -31,10 +31,10 @@ export class ProgressBars extends BaseMonitoringAction<ClaudeSettings> {
     override async onSendToPlugin(ev: any): Promise<void> {
         if (ev.payload?.event !== "getScopes") return;
 
+        // Through refresh, so the picker neither bypasses the fetch gap nor starts a
+        // second fetch while one is running.
         if (!this.lastResult) {
-            try {
-                this.lastResult = await this.fetchProviderUsage(ev);
-            } catch {}
+            await this.refresh(ev);
         }
         try {
             await ev.action.sendToPropertyInspector({ event: "scopeList", scopes: this.scopes() });
@@ -72,7 +72,8 @@ export class ProgressBars extends BaseMonitoringAction<ClaudeSettings> {
         const settings = (ev?.payload?.settings ?? {}) as ClaudeSettings;
         const layout: TileLayout = settings.layout ?? "bars";
 
-        if (layout === "ring") {
+        // The card shows one metric, like the ring, and shares its picker.
+        if (layout === "ring" || layout === "card") {
             return this.tileDisplay([this.metricSlot(settings.metric ?? "session", result, settings)], layout);
         }
 
@@ -91,16 +92,19 @@ export class ProgressBars extends BaseMonitoringAction<ClaudeSettings> {
         // A scoped limit the account stopped reporting still has a name in the cache.
         const cached = settings.availableScopes?.find((scope) => scope.key === metric)?.label;
         const label = preset?.label ?? (bucket ? scopeLabel(metric, bucket) : cached ?? metric);
+        const cardLabel = preset?.cardLabel ?? `${label}週間・残り`;
 
         if (!bucket) {
-            return { kind: "stat", label, valueText: "—", caption: "no data", muted: true };
+            return { kind: "stat", label, cardLabel, valueText: "—", caption: "no data", muted: true };
         }
 
         return {
             kind: "gauge",
             label,
+            cardLabel,
             percent: bucket.usagePercent ?? 0,
-            caption: bucket.resetTime ? formatTimeUntil(bucket.resetTime) : undefined
+            caption: bucket.resetTime ? formatTimeUntil(bucket.resetTime) : undefined,
+            resetAt: bucket.resetTime ?? null
         };
     }
 }

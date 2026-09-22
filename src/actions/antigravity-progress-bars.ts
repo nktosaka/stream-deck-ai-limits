@@ -43,6 +43,8 @@ export class AntigravityProgressBars extends BaseMonitoringAction<AntigravitySet
             try {
                 const email = await this.provider.login();
                 await this.sendStatusToPI(ev);
+                // New credentials: the gap guarded the old ones, so fetch at once.
+                this.resetFetchGap(this.fetchKey(ev?.payload?.settings));
                 await this.refresh(ev);
             } catch (err: any) {
                 await streamDeck.ui.sendToPropertyInspector({

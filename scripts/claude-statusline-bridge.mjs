@@ -31,7 +31,20 @@ export async function saveQuotaSnapshot(input, file = DEFAULT_CACHE_FILE, now = 
     const temporary = file + "." + process.pid + "." + randomUUID() + ".tmp";
     try {
         await writeFile(temporary, JSON.stringify(snapshot), { flag: "wx", mode: 0o600 });
-        await rename(temporary, file);
+        // On Windows another Claude statusLine process or antivirus may briefly
+        // hold the destination with a non-sharing handle. Retry only transient
+        // Windows file-access failures; never remove the destination or write
+        // partially over it. A failed update leaves the last good snapshot.
+        for (let attempt = 0; ; attempt++) {
+            try {
+                await rename(temporary, file);
+                break;
+            } catch (err) {
+                const transient = ["EPERM", "EACCES", "EBUSY"].includes(err?.code);
+                if (!transient || attempt >= 9) throw err;
+                await new Promise((resolveDelay) => setTimeout(resolveDelay, Math.min(20 * (attempt + 1), 120)));
+            }
+        }
     } finally {
         await unlink(temporary).catch(() => {});
     }

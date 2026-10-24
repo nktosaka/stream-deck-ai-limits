@@ -8,7 +8,9 @@ export const streamDeckLogger: Logger = {
 
 export class LimitsManager {
     private static instance: LimitsManager;
-    private client = new LimitsClient({ logger: streamDeckLogger });
+    // Claude Code exclusively owns its OAuth refresh and credential-file writes.
+    // The Stream Deck monitor is a read-only consumer, not a second token writer.
+    private client = new LimitsClient({ logger: streamDeckLogger, claude: { autoRefresh: false } });
 
     private constructor() {}
 

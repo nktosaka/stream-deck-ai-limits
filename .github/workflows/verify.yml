@@ -1,0 +1,32 @@
+name: Verify plugin changes
+
+on:
+  pull_request:
+    branches:
+      - custom/remaining-card
+  push:
+    branches:
+      - "fix/claude-auth-readonly-statusline-*"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Run regression tests
+        run: npm test
+      - name: Build plugin
+        run: npm run build

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "rollup -c",
-    "test": "rollup -c rollup.test.config.mjs --silent && node --test \"tmp/test/*.test.mjs\"",
+    "test": "rollup -c rollup.test.config.mjs --silent && node scripts/run-tests.mjs",
     "link": "streamdeck link com.len.limits.sdPlugin",
     "unlink": "streamdeck unlink com.len.limits",
     "watch": "rollup -c -w --watch.onEnd=\"streamdeck restart com.len.limits\"",

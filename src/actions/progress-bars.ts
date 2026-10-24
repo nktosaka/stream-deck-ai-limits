@@ -5,6 +5,7 @@ import { BaseMonitoringAction } from "./base-monitoring-action";
 import { ServiceTheme } from "../interfaces/theme";
 import { Slot } from "../ui/progress-bar-renderer";
 import { formatTimeUntil } from "../utils/time-formatter";
+import { loadClaudeStatusLineUsage } from "../services/claude-statusline-cache";
 
 /** Bucket keys vary per Claude plan/API version, so each metric accepts several. */
 const METRICS: Record<string, { label: string; cardLabel: string; keys: string[] }> = {
@@ -23,9 +24,30 @@ export class ProgressBars extends BaseMonitoringAction<ClaudeSettings> {
 
     protected override async refresh(ev: any): Promise<void> {
         await super.refresh(ev);
-        if (this.lastResult && !this.lastResult.error) {
+        // statusLine covers the aggregate windows only. Never erase model-scoped
+        // options cached from the native API when a statusLine snapshot wins.
+        if (this.lastResult && !this.lastResult.error && !("source" in this.lastResult)) {
             await this.persistScopesToSettings();
         }
+    }
+
+    protected override async fetchProviderUsage(ev: any): Promise<StandardUsageResult> {
+        // Prefer Claude Code's documented statusLine fields. It emits no OAuth
+        // token, touches no credential file, and needs no new network request.
+        const snapshot = await loadClaudeStatusLineUsage();
+        if (snapshot) return snapshot;
+        // Only read Claude Code credentials. LimitsClient has autoRefresh=false.
+        return await super.fetchProviderUsage(ev) as StandardUsageResult;
+    }
+
+    protected override async draw(ev: any, result: StandardUsageResult): Promise<void> {
+        if (result.error && (result.error.code === 401 || result.error.code === "AUTH")) {
+            // Actionable error, no tokens or headers. Normal polling/press recovers
+            // after Claude Code refreshes its own login.
+            await super.draw(ev, { ...result, error: { ...result.error, message: "Run /login" } });
+            return;
+        }
+        await super.draw(ev, result);
     }
 
     override async onSendToPlugin(ev: any): Promise<void> {
